@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control
+    namespace="YourCompany"
+    constructor="OrgChartControl"
+    version="1.0.6"
+    display-name-key="OrgChartControl_Display_Key"
+    description-key="OrgChartControl_Desc_Key"
+    control-type="standard">
+
+    <data-set
+      name="sampleDataSet"
+      display-name-key="Dataset_Display_Key">
+    </data-set>
+
+  <resources>
+    <code path="index.ts" order="1" />
+<!--    <css path="css/OrgChart.css" order="1" />
+-->
+  </resources>
+
+  </control>
+</manifest>
