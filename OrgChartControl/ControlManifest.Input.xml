@@ -3,7 +3,7 @@
   <control
     namespace="YourCompany"
     constructor="OrgChartControl"
-    version="1.0.6"
+    version="1.0.9"
     display-name-key="OrgChartControl_Display_Key"
     description-key="OrgChartControl_Desc_Key"
     control-type="standard">
@@ -18,6 +18,8 @@
 <!--    <css path="css/OrgChart.css" order="1" />
 -->
   </resources>
-
+   <feature-usage>
+      <uses-feature name="WebAPI" required="true" />
+   </feature-usage>
   </control>
 </manifest>
