@@ -52,7 +52,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
 
         try {
             const result = await this.context.webAPI.retrieveMultipleRecords(
-                "pam_employee",
+                "pam_employees",
                 query
             );
 
