@@ -78,15 +78,17 @@ interface AppProps {
   initialEdges: Edge[];
 }
 
-export default function App1({
-  initialNodes,
-  initialEdges,
-}: AppProps) {
-  const [nodes, setNodes, onNodesChange] =
-    useNodesState(initialNodes);
+export default function App1({ initialNodes, initialEdges }: AppProps) {
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-  const [edges, setEdges, onEdgesChange] =
-    useEdgesState(initialEdges);
+  React.useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes, setNodes]);
+
+  React.useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>

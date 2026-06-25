@@ -45,10 +45,9 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     }
 
     private async loadMembers(): Promise<void> {
-        const query =
-            "?$select=pam_name" +
-            "&$expand=pam_Position($select=pam_positiontitle;$expand=pam_Team($select=pam_teamsid))" +
-            "&$filter=pam_Position/pam_team ne null";
+            const query =
+                "?$select=pam_name" +
+                "&$expand=pam_Position($select=pam_positiontitle;$expand=pam_Team($select=pam_teamsid))";
 
         try {
             const result = await this.context.webAPI.retrieveMultipleRecords(
@@ -60,7 +59,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
             for (const emp of result.entities) {
                 const name = emp.pam_name as string;
                 const pos = emp.pam_Position;
-                const teamId = pos && pos.pam_team ? pos.pam_team.pam_teamsid : null;
+                const teamId = pos && pos.pam_Team ? pos.pam_Team.pam_teamsid : null;
                 if (!name || !teamId) continue;
                 const key = norm(teamId as string);
                 (map[key] = map[key] || []).push(name);
@@ -96,6 +95,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
         const nodes = dataset.sortedRecordIds.map((id: string, index: number) => {
             const record = dataset.records[id];
             const teamKey = norm(id);
+            console.log("Node key:", teamKey, "→ members found:", (this.membersByTeam[teamKey] || []).length);
             return {
                 id: teamKey,
                 type: "teamNode",
