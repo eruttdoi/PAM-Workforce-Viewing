@@ -47,8 +47,8 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     private async loadMembers(): Promise<void> {
         const query =
             "?$select=pam_name" +
-            "&$expand=pam_position($select=pam_positiontitle;$expand=pam_Team($select=pam_teamsid))" +
-            "&$filter=pam_position/pam_team ne null";
+            "&$expand=pam_Position($select=pam_positiontitle;$expand=pam_Team($select=pam_teamsid))" +
+            "&$filter=pam_Position/pam_team ne null";
 
         try {
             const result = await this.context.webAPI.retrieveMultipleRecords(
@@ -59,7 +59,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
             const map: Record<string, string[]> = {};
             for (const emp of result.entities) {
                 const name = emp.pam_name as string;
-                const pos = emp.pam_position;
+                const pos = emp.pam_Position;
                 const teamId = pos && pos.pam_team ? pos.pam_team.pam_teamsid : null;
                 if (!name || !teamId) continue;
                 const key = norm(teamId as string);
