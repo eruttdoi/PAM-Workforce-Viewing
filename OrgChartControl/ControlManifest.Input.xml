@@ -3,7 +3,7 @@
   <control
     namespace="YourCompany"
     constructor="OrgChartControl"
-    version="1.0.18"
+    version="1.0.20"
     display-name-key="OrgChartControl_Display_Key"
     description-key="OrgChartControl_Desc_Key"
     control-type="standard">
@@ -13,13 +13,38 @@
       display-name-key="Dataset_Display_Key">
     </data-set>
 
+    <data-set
+      name="positionsDataSet"
+      display-name-key="Positions_Display_Key">
+      <property-set
+        name="posTeamId"
+        display-name-key="Position_Team_Key"
+        of-type="Lookup.Simple"
+        usage="bound"
+        required="true" />
+    </data-set>
+
+    <!-- Employees: name + position lookup -->
+    <data-set
+      name="employeesDataSet"
+      display-name-key="Employees_Display_Key">
+      <property-set
+        name="empName"
+        display-name-key="Employee_Name_Key"
+        of-type="SingleLine.Text"
+        usage="bound"
+        required="true" />
+      <property-set
+        name="empPositionId"
+        display-name-key="Employee_Position_Key"
+        of-type="Lookup.Simple"
+        usage="bound"
+        required="true" />
+    </data-set>
   <resources>
     <code path="index.ts" order="1" />
 <!--    <css path="css/OrgChart.css" order="1" />
 -->
   </resources>
-   <feature-usage>
-      <uses-feature name="WebAPI" required="true" />
-   </feature-usage>
   </control>
 </manifest>
