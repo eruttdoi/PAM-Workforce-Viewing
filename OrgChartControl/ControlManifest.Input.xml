@@ -3,11 +3,10 @@
   <control
     namespace="YourCompany"
     constructor="OrgChartControl"
-    version="1.0.20"
+    version="1.0.32"
     display-name-key="OrgChartControl_Display_Key"
     description-key="OrgChartControl_Desc_Key"
     control-type="standard">
-
     <data-set
       name="sampleDataSet"
       display-name-key="Dataset_Display_Key">
@@ -17,30 +16,37 @@
       name="positionsDataSet"
       display-name-key="Positions_Display_Key">
       <property-set
-        name="posTeamId"
-        display-name-key="Position_Team_Key"
-        of-type="Lookup.Simple"
+        name="PositionGuid"
+        display-name-key="Position_Guid_Key"
+        of-type="SingleLine.Text"
         usage="bound"
-        required="true" />
+        required="false" />
+      <property-set
+        name="PosTeamId"
+        display-name-key="Position_Team_Key"
+        of-type="SingleLine.Text"
+        usage="bound"
+        required="false" />
     </data-set>
 
-    <!-- Employees: name + position lookup -->
+    <!-- Employees: name + position lookup (as flat text GUID) -->
     <data-set
       name="employeesDataSet"
       display-name-key="Employees_Display_Key">
       <property-set
-        name="empName"
+        name="EmpName"
         display-name-key="Employee_Name_Key"
         of-type="SingleLine.Text"
         usage="bound"
-        required="true" />
+        required="false" />
       <property-set
-        name="empPositionId"
+        name="EmpPositionId"
         display-name-key="Employee_Position_Key"
-        of-type="Lookup.Simple"
+        of-type="SingleLine.Text"
         usage="bound"
-        required="true" />
+        required="false" />
     </data-set>
+
   <resources>
     <code path="index.ts" order="1" />
 <!--    <css path="css/OrgChart.css" order="1" />
