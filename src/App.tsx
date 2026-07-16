@@ -68,8 +68,31 @@ function TeamNode({ data }: any) {
   );
 }
 
+
+function GroupNode({ data }: any) {
+  return (
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 8,
+          left: 12,
+          fontFamily: "Segoe UI",
+          fontWeight: 700,
+          fontSize: 160,
+          color: "#2e7d32",
+          letterSpacing: 0.5,
+        }}
+      >
+        {data.label}
+      </div>
+    </div>
+  );
+}
+
 const nodeTypes = {
   teamNode: TeamNode,
+  groupNode: GroupNode
 };
 
 
@@ -98,6 +121,8 @@ export default function App1({ initialNodes, initialEdges }: AppProps) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
+        minZoom={0.2}
+        maxZoom={2}
         fitView
         fitViewOptions={{
           padding: 0.2,

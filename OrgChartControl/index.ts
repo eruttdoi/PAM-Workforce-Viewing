@@ -6,14 +6,30 @@ import App1 from "../src/App";
 
 const NODE_W = 260;
 
+// Shape of a node as it flows through this file (pre-render).
+interface OrgNode {
+  id: string;
+  type: string;
+  position: { x: number; y: number };
+  data: { teamName: string; members: string[]; label?: string };
+  style?: Record<string, string | number>;
+  parentId?: string;
+  extent?: "parent";
+  _bureau?: string | null;
+}
+
+interface OrgEdge {
+  id: string;
+  source: string;
+  target: string;
+  animated: boolean;
+}
+
 function nodeHeight(memberCount: number): number {
   return 40 + 28 + 20 + memberCount * 24;
 }
 
-function layoutNodes<
-  N extends { id: string; position: { x: number; y: number }; data: { members: string[] } },
-  E extends { source: string; target: string }
->(nodes: N[], edges: E[]): N[] {
+function layoutNodes(nodes: OrgNode[], edges: { source: string; target: string }[]): OrgNode[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: "TB", nodesep: 60, ranksep: 100 });
@@ -36,7 +52,95 @@ function layoutNodes<
 }
 
 const norm = (g: string) => g.replace(/[{}]/g, "").toLowerCase();
-const normName = (s: string) => s.trim().toLowerCase();
+
+const GROUP_PAD = 40; // space between the group border and the nodes inside
+const GROUP_TITLE_H = 40; // height reserved at the top of the box for the label
+const GROUP_ORIGIN = { x: 10000, y: 1200 }; // where the group block is placed on the canvas
+
+/**
+ * Wrap all nodes whose _bureau matches `bureau` inside a single group node.
+ * The members are laid out with their OWN dagre pass (using only the edges
+ * internal to the group) so they keep a proper top-down hierarchy and their
+ * connecting edges render cleanly inside the box.
+ */
+function wrapBureauGroup(nodes: OrgNode[], bureau: string, edges: OrgEdge[]): OrgNode[] {
+  const members = nodes.filter((n) => n._bureau === bureau);
+  if (members.length === 0) return nodes.map(stripTag);
+
+  const memberIds = new Set(members.map((m) => m.id));
+
+  // Only the edges whose BOTH endpoints are inside this group.
+  const internalEdges = edges.filter(
+    (e) => memberIds.has(e.source) && memberIds.has(e.target)
+  );
+
+  console.log(
+    `GROUP ${bureau}: members=${members.length}, internalEdges=${internalEdges.length}`
+  );
+
+  // Dagre layout of just the group members.
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 80 });
+  members.forEach((m) => {
+    g.setNode(m.id, { width: NODE_W, height: nodeHeight(m.data.members.length) });
+  });
+  internalEdges.forEach((e) => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+
+  // Bounding box of the sub-layout, so we can shift it to start at (PAD, PAD).
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  members.forEach((m) => {
+    const p = g.node(m.id);
+    const w = NODE_W;
+    const h = nodeHeight(m.data.members.length);
+    minX = Math.min(minX, p.x - w / 2);
+    minY = Math.min(minY, p.y - h / 2);
+    maxX = Math.max(maxX, p.x + w / 2);
+    maxY = Math.max(maxY, p.y + h / 2);
+  });
+
+  const groupId = `group-${bureau.toLowerCase()}`;
+  const groupNode: OrgNode = {
+    id: groupId,
+    type: "groupNode",
+    position: { x: GROUP_ORIGIN.x, y: GROUP_ORIGIN.y },
+    data: { teamName: "", members: [], label: bureau },
+    style: {
+      width: maxX - minX + GROUP_PAD * 2,
+      height: maxY - minY + GROUP_PAD * 2 + GROUP_TITLE_H,
+      backgroundColor: "rgba(76, 175, 80, 0.15)",
+      border: "2px solid #4caf50",
+      borderRadius: 12,
+    },
+  };
+
+  // Position each member relative to the group, shifted so the sub-layout's
+  // top-left sits below the title bar.
+  const rebuilt = nodes.map((n) => {
+    if (!memberIds.has(n.id)) return stripTag(n);
+    const p = g.node(n.id);
+    const h = nodeHeight(n.data.members.length);
+    return stripTag({
+      ...n,
+      parentId: groupId,
+      extent: "parent",
+      position: {
+        x: p.x - NODE_W / 2 - minX + GROUP_PAD,
+        y: p.y - h / 2 - minY + GROUP_PAD + GROUP_TITLE_H,
+      },
+    });
+  });
+
+  // Group node must come BEFORE its children in the array.
+  return [groupNode, ...rebuilt];
+}
+
+function stripTag(n: OrgNode): OrgNode {
+  const rest = { ...n };
+  delete rest._bureau;
+  return rest;
+}
 
 export class OrgChartControl implements ComponentFramework.StandardControl<IInputs, IOutputs> {
   private container!: HTMLDivElement;
@@ -59,190 +163,207 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
 
   public updateView(context: ComponentFramework.Context<IInputs>): void {
     this.context = context;
+    const teams = context.parameters.sampleDataSet;
+    const positions = context.parameters.positionsDataSet;
+    const employees = context.parameters.employeesDataSet;
 
-    const datasets = [
-      context.parameters.sampleDataSet,
-      context.parameters.positionsDataSet,
-      context.parameters.employeesDataSet
-    ];
+    // Skip early renders where a dataset is still loading / empty.
+    if (teams.loading || teams.sortedRecordIds.length === 0) return;
 
-    // Bump page size on every dataset so we pull large batches, not 25 at a time.
-    for (const ds of datasets) {
-      if (ds && ds.paging && typeof ds.paging.setPageSize === "function") {
-        ds.paging.setPageSize(5000);
-      }
+    // Page through every dataset before rendering the full set.
+    if (teams.paging && teams.paging.hasNextPage) {
+      teams.paging.loadNextPage();
+      return;
     }
-
-    // If ANY dataset still has more pages, load the next and wait.
-    // loadNextPage triggers another updateView, so we return early and
-    // render only once all three are fully loaded.
-    for (const ds of datasets) {
-      if (ds && ds.paging && ds.paging.hasNextPage) {
-        ds.paging.loadNextPage();
-        return;
-      }
+    if (positions.paging && positions.paging.hasNextPage) {
+      positions.paging.loadNextPage();
+      return;
+    }
+    if (employees.paging && employees.paging.hasNextPage) {
+      employees.paging.loadNextPage();
+      return;
     }
 
     this.render();
   }
 
   /**
-   * Build teamId -> [employee names] by chaining
-   * Employee -> Position -> Team across two datasets.
+   * Build teamNodeId -> [employee names] by chaining
+   * Employee -> Position -> Team across three datasets.
+   *
+   * Note: on the canvas host, dataset record ids are short synthetic keys
+   * (e.g. "5637"), while lookups return full GUIDs. We bridge the two id
+   * spaces with guid->shortId maps.
    */
-  private buildMembersByTeam(): Record<string, string[]> {
+  private buildMembersByTeam(guidToNodeId: Record<string, string>): Record<string, string[]> {
     const posDs = this.context.parameters.positionsDataSet;
     const empDs = this.context.parameters.employeesDataSet;
     const map: Record<string, string[]> = {};
 
-    // Diagnostics
-    console.log("POS dataset count:", posDs.sortedRecordIds.length);
-    console.log("POS columns:", posDs.columns.map((c) => c.name));
-    console.log("EMP dataset count:", empDs.sortedRecordIds.length);
-    console.log("EMP columns:", empDs.columns.map((c) => c.name));
+    // Resolve column names case-insensitively (host delivers mixed case).
+    const findCol = (
+      ds: ComponentFramework.PropertyTypes.DataSet,
+      target: string
+    ): string | undefined =>
+      ds.columns.find(
+        (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
+          c.name.toLowerCase() === target.toLowerCase()
+      )?.name;
 
-    // Resolve flat columns case-insensitively (added via AddColumns in Power Fx).
-    const posGuidCol = posDs.columns.find((c) => c.name && c.name.toLowerCase() === "positionguid")?.name;
-    const posTeamCol = posDs.columns.find((c) => c.name && c.name.toLowerCase() === "posteamid")?.name;
-    const empNameCol = empDs.columns.find((c) => c.name && c.name.toLowerCase() === "empname")?.name;
-    const empPosCol  = empDs.columns.find((c) => c.name && c.name.toLowerCase() === "emppositionid")?.name;
+    const posTeamCol = findCol(posDs, "posteamid");
+    const posGuidCol = findCol(posDs, "positionguid");
+    const empNameCol = findCol(empDs, "empname");
+    const empPosCol = findCol(empDs, "emppositionid");
 
-    console.log("Resolved POS cols:", { posGuidCol, posTeamCol });
-    console.log("Resolved EMP cols:", { empNameCol, empPosCol });
+    console.log("resolved cols -> posTeamCol:", posTeamCol, "posGuidCol:", posGuidCol,
+      "empNameCol:", empNameCol, "empPosCol:", empPosCol);
+    console.log(`counts -> positions: ${posDs.sortedRecordIds.length}, employees: ${empDs.sortedRecordIds.length}, guidToNodeId keys: ${Object.keys(guidToNodeId).length}`);
 
-    // positionGuid -> teamGuid
+    // A lookup value on this host may arrive as an EntityReference object
+    // ({id:{guid}}) OR as a bare GUID string. Normalize both to a guid string.
+    const refToGuid = (v: unknown): string | null => {
+      if (!v) return null;
+      if (typeof v === "string") return norm(v);
+      const ref = v as ComponentFramework.EntityReference;
+      if (ref.id && ref.id.guid) return norm(ref.id.guid);
+      return null;
+    };
+
+    // Sample one of each to see id/value shapes.
+    const pid0 = posDs.sortedRecordIds[0];
+    if (pid0) {
+      console.log("sample position:", pid0,
+        "posTeamId raw:", posTeamCol ? JSON.stringify(posDs.records[pid0].getValue(posTeamCol)) : "(no col)",
+        "positionGuid raw:", posGuidCol ? JSON.stringify(posDs.records[pid0].getValue(posGuidCol)) : "(no col)");
+    }
+    const eid0 = empDs.sortedRecordIds[0];
+    if (eid0) {
+      console.log("sample employee:", eid0,
+        "name:", empNameCol ? empDs.records[eid0].getFormattedValue(empNameCol) : "(no col)",
+        "posRef raw:", empPosCol ? JSON.stringify(empDs.records[eid0].getValue(empPosCol)) : "(no col)");
+    }
+
+    // positionShortId -> teamGuid, and positionGuid -> positionShortId.
     const posToTeam: Record<string, string> = {};
-    if (posGuidCol && posTeamCol) {
-      for (const id of posDs.sortedRecordIds) {
-        const rec = posDs.records[id];
-        const posGuid = norm((rec.getValue(posGuidCol) as string) || "");
-        const teamGuid = norm((rec.getValue(posTeamCol) as string) || "");
-        if (posGuid && teamGuid) posToTeam[posGuid] = teamGuid;
-      }
+    const posGuidToShortId: Record<string, string> = {};
+    for (const id of posDs.sortedRecordIds) {
+      const rec = posDs.records[id];
+      const teamGuid = posTeamCol ? refToGuid(rec.getValue(posTeamCol)) : null;
+      if (teamGuid) posToTeam[norm(id)] = teamGuid;
+      const pg = posGuidCol ? rec.getValue(posGuidCol) : null;
+      if (pg) posGuidToShortId[norm(String(pg))] = norm(id);
     }
 
-    // employee -> position -> team
-    if (empNameCol && empPosCol) {
-      for (const id of empDs.sortedRecordIds) {
-        const rec = empDs.records[id];
-        const name = rec.getFormattedValue(empNameCol) || (rec.getValue(empNameCol) as string) || "";
-        const posGuid = norm((rec.getValue(empPosCol) as string) || "");
-        const teamGuid = posGuid ? posToTeam[posGuid] : null;
-        if (!name || !teamGuid) continue;
-        (map[teamGuid] = map[teamGuid] || []).push(name);
-      }
+    // employees -> chain through position -> team
+    let hadName = 0, hadPosRef = 0, hadPosMatch = 0, hadTeamMatch = 0;
+    for (const id of empDs.sortedRecordIds) {
+      const rec = empDs.records[id];
+      const name = empNameCol ? rec.getFormattedValue(empNameCol) : null;
+      const posGuid = empPosCol ? refToGuid(rec.getValue(empPosCol)) : null;
+      const posShortId = posGuid ? posGuidToShortId[posGuid] : null;
+      const teamGuid = posShortId ? posToTeam[posShortId] : null;
+      const teamId = teamGuid ? guidToNodeId[teamGuid] : null;
+
+      if (name) hadName++;
+      if (posGuid) hadPosRef++;
+      if (posShortId) hadPosMatch++;
+      if (teamId) hadTeamMatch++;
+
+      if (!name || !teamId) continue;
+      (map[teamId] = map[teamId] || []).push(name);
     }
 
-    console.log("posToTeam entries:", Object.keys(posToTeam).length);
-    console.log("membersByTeam teams populated:", Object.keys(map).length);
-
+    console.log(`chain funnel -> hadName:${hadName} hadPosRef:${hadPosRef} hadPosMatch:${hadPosMatch} hadTeamMatch:${hadTeamMatch}`);
+    console.log(`posToTeam keys: ${Object.keys(posToTeam).length}, posGuidToShortId keys: ${Object.keys(posGuidToShortId).length}`);
+    console.log(`membersByTeam keys built: ${Object.keys(map).length}`);
     return map;
   }
 
   private render(): void {
+    console.log("=== OrgChart BUILD #30 ===");
     const dataset = this.context.parameters.sampleDataSet;
-    const membersByTeam = this.buildMembersByTeam();
 
     // Diagnostic: which columns is the Teams dataset actually delivering?
-    console.log("Teams columns:", dataset.columns.map((c) => c.name));
+    console.log(
+      "Teams columns:",
+      dataset.columns.map((c: ComponentFramework.PropertyHelper.DataSetApi.Column) => c.name)
+    );
 
-    // Resolve the flat parent-id column we added in Power Fx via AddColumns.
-    const parentIdCol = dataset.columns.find(
-      (c) => c.name.toLowerCase() === "parentteamid"
+    // Resolve column names case-insensitively.
+    const parentCol = dataset.columns.find(
+      (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
+        c.name.toLowerCase() === "pam_parentteam"
     )?.name;
 
-    // Also resolve the flat parent-name column (useful for debugging/fallback).
-    const parentNameCol = dataset.columns.find(
-      (c) => c.name.toLowerCase() === "parentteamname"
+    const bureauCol = dataset.columns.find(
+      (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
+        c.name.toLowerCase() === "pam_originatingbureau"
     )?.name;
 
-    console.log("Resolved parentIdCol:", parentIdCol, "| parentNameCol:", parentNameCol);
+    // Record id is a short key; parent lookup returns a GUID. Map GUID->nodeId.
+    const guidCol = dataset.columns.find(
+      (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
+        c.name.toLowerCase() === "pam_teamsid" || c.name.toLowerCase() === "teamguid"
+    )?.name;
 
-    // ONE-TIME deep dump of the first record so we can see the true shape
-    // of every field and every accessor available on it.
-    const firstId = dataset.sortedRecordIds[0];
-    if (firstId) {
-      const r = dataset.records[firstId];
-      console.log("FULL COLUMN META:", JSON.stringify(dataset.columns, null, 2));
-      console.log("RECORD KEYS:", Object.keys(r));
-      console.log("sample node id (normalized):", norm(firstId));
-      if (parentIdCol) {
-        console.log("sample parentId getValue:", r.getValue(parentIdCol));
-        console.log("sample parentId (normalized):", norm((r.getValue(parentIdCol) as string) || ""));
-      }
-      if (parentNameCol) {
-        console.log("sample parentName getValue:", r.getValue(parentNameCol));
-        console.log("sample parentName getFormatted:", r.getFormattedValue(parentNameCol));
-      }
-      // some hosts expose raw fields under _record / fields
-      console.log("RAW RECORD:", JSON.stringify(r, (k, v) => (k.startsWith("_") ? undefined : v), 2));
+    const guidToNodeId: Record<string, string> = {};
+    if (guidCol) {
+      dataset.sortedRecordIds.forEach((id: string) => {
+        const g = dataset.records[id].getValue(guidCol);
+        if (g) guidToNodeId[norm(String(g))] = norm(id);
+      });
     }
 
-    // Resolve the team's OWN guid column (added via AddColumns as "TeamGuid").
-    // The dataset row id is a sequential integer on a collection/canvas binding,
-    // so we must key nodes by the real team GUID to match parentId GUIDs.
-    const teamGuidCol = dataset.columns.find(
-      (c) => c.name.toLowerCase() === "teamguid"
-    )?.name;
+    const membersByTeam = this.buildMembersByTeam(guidToNodeId);
 
-    console.log("Resolved teamGuidCol:", teamGuidCol);
-
-    // Map each dataset row id -> that team's GUID, so edges can reference it.
-    const rowToGuid: Record<string, string> = {};
-
-    const nodes = dataset.sortedRecordIds.map((id: string, index: number) => {
+    // Build node list.
+    const nodes: OrgNode[] = dataset.sortedRecordIds.map((id: string, index: number) => {
       const record = dataset.records[id];
-      const teamGuid = teamGuidCol
-        ? norm((record.getValue(teamGuidCol) as string) || "")
-        : norm(id); // fallback to row id if TeamGuid missing
-      rowToGuid[id] = teamGuid;
-
+      const teamKey = norm(id);
       const teamName = record.getFormattedValue("pam_team");
+      const bureauRaw = bureauCol ? (record.getValue(bureauCol) as string | null) : null;
+      const bureau = bureauRaw ? bureauRaw.trim().toUpperCase() : null;
       return {
-        id: teamGuid, // key node by the real team GUID
+        id: teamKey,
         type: "teamNode",
         position: { x: index * 300, y: 100 },
         data: {
           teamName: teamName,
-          members: membersByTeam[teamGuid] || []
-        }
+          members: membersByTeam[teamKey] || []
+        },
+        _bureau: bureau
       };
     });
 
-    // Match child -> parent by GUID, which is unique (unlike names).
-    const edges = dataset.sortedRecordIds
-      .map((id: string) => {
+    // Build edges by matching each team's parent GUID to a team node id.
+    const edges: OrgEdge[] = dataset.sortedRecordIds
+      .map((id: string): OrgEdge | null => {
         const record = dataset.records[id];
-        const childGuid = rowToGuid[id];
-        const rawParentId = parentIdCol
-          ? (record.getValue(parentIdCol) as string | null)
+        const parentRef = parentCol
+          ? (record.getValue(parentCol) as ComponentFramework.EntityReference | null)
           : null;
-
-        console.log(
-          "parent debug:",
-          "childGuid:", childGuid,
-          "rawParentId:", JSON.stringify(rawParentId)
-        );
-
-        if (!rawParentId) return null;
-        const parentKey = norm(rawParentId);
-
+        if (!parentRef || !parentRef.id) return null;
+        const sourceId = guidToNodeId[norm(parentRef.id.guid)];
+        if (!sourceId) return null;
         return {
-          id: `e-${childGuid}`,
-          source: parentKey,
-          target: childGuid,
+          id: `e-${norm(id)}`,
+          source: sourceId,
+          target: norm(id),
           animated: true
         };
       })
-      .filter((edge): edge is NonNullable<typeof edge> => edge !== null);
+      .filter((edge: OrgEdge | null): edge is OrgEdge => edge !== null);
 
     console.log(`EDGES BUILT: ${edges.length} (out of ${dataset.sortedRecordIds.length} teams)`);
 
     const positioned = layoutNodes(nodes, edges);
+    const npsCount = positioned.filter((n) => n._bureau === "NPS").length;
+    console.log(`NPS nodes found: ${npsCount}`);
+    const grouped = wrapBureauGroup(positioned, "NPS", edges);
 
     this.root.render(
       React.createElement(App1, {
-        initialNodes: positioned,
+        initialNodes: grouped,
         initialEdges: edges
       })
     );
