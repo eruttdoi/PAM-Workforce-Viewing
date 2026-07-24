@@ -55,30 +55,35 @@ const norm = (g: string) => g.replace(/[{}]/g, "").toLowerCase();
 
 const GROUP_PAD = 40; // space between the group border and the nodes inside
 const GROUP_TITLE_H = 40; // height reserved at the top of the box for the label
-const GROUP_ORIGIN = { x: 10000, y: 1200 }; // where the group block is placed on the canvas
+const GROUP_GAP = 60; // gap between adjacent bureau boxes in the grid
+const GRID_COLS = 3; // bureau boxes per row (3 x 3 fits 8 with room to spare)
+
+// The 8 bureaus, each with a fill + border color. Order = grid placement order.
+const BUREAUS: { name: string; fill: string; border: string; title: string }[] = [
+  { name: "USGS", fill: "rgba(76, 175, 80, 0.15)",  border: "#4caf50", title: "#2e7d32" },
+  { name: "NPS",  fill: "rgba(33, 150, 243, 0.15)", border: "#2196f3", title: "#1565c0" },
+  { name: "FWS",  fill: "rgba(156, 39, 176, 0.15)", border: "#9c27b0", title: "#6a1b9a" },
+  { name: "WF",   fill: "rgba(255, 152, 0, 0.15)",  border: "#ff9800", title: "#e65100" },
+  { name: "BOR",  fill: "rgba(0, 150, 136, 0.15)",  border: "#009688", title: "#00695c" },
+  { name: "BLM",  fill: "rgba(121, 85, 72, 0.15)",  border: "#795548", title: "#4e342e" },
+  { name: "PAM",  fill: "rgba(233, 30, 99, 0.15)",  border: "#e91e63", title: "#ad1457" },
+  { name: "BBO",  fill: "rgba(96, 125, 139, 0.15)", border: "#607d8b", title: "#37474f" },
+];
 
 /**
- * Wrap all nodes whose _bureau matches `bureau` inside a single group node.
- * The members are laid out with their OWN dagre pass (using only the edges
- * internal to the group) so they keep a proper top-down hierarchy and their
- * connecting edges render cleanly inside the box.
+ * Lay out a single bureau's members with their own dagre pass and return the
+ * positioned member nodes (relative to 0,0 of their sub-layout) plus the
+ * sub-layout's width/height.
  */
-function wrapBureauGroup(nodes: OrgNode[], bureau: string, edges: OrgEdge[]): OrgNode[] {
-  const members = nodes.filter((n) => n._bureau === bureau);
-  if (members.length === 0) return nodes.map(stripTag);
-
+function layoutOneBureau(
+  members: OrgNode[],
+  edges: OrgEdge[]
+): { nodes: OrgNode[]; width: number; height: number } {
   const memberIds = new Set(members.map((m) => m.id));
-
-  // Only the edges whose BOTH endpoints are inside this group.
   const internalEdges = edges.filter(
     (e) => memberIds.has(e.source) && memberIds.has(e.target)
   );
 
-  console.log(
-    `GROUP ${bureau}: members=${members.length}, internalEdges=${internalEdges.length}`
-  );
-
-  // Dagre layout of just the group members.
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 80 });
@@ -88,52 +93,109 @@ function wrapBureauGroup(nodes: OrgNode[], bureau: string, edges: OrgEdge[]): Or
   internalEdges.forEach((e) => g.setEdge(e.source, e.target));
   dagre.layout(g);
 
-  // Bounding box of the sub-layout, so we can shift it to start at (PAD, PAD).
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   members.forEach((m) => {
     const p = g.node(m.id);
-    const w = NODE_W;
     const h = nodeHeight(m.data.members.length);
-    minX = Math.min(minX, p.x - w / 2);
+    minX = Math.min(minX, p.x - NODE_W / 2);
     minY = Math.min(minY, p.y - h / 2);
-    maxX = Math.max(maxX, p.x + w / 2);
+    maxX = Math.max(maxX, p.x + NODE_W / 2);
     maxY = Math.max(maxY, p.y + h / 2);
   });
 
-  const groupId = `group-${bureau.toLowerCase()}`;
-  const groupNode: OrgNode = {
-    id: groupId,
-    type: "groupNode",
-    position: { x: GROUP_ORIGIN.x, y: GROUP_ORIGIN.y },
-    data: { teamName: "", members: [], label: bureau },
-    style: {
-      width: maxX - minX + GROUP_PAD * 2,
-      height: maxY - minY + GROUP_PAD * 2 + GROUP_TITLE_H,
-      backgroundColor: "rgba(76, 175, 80, 0.15)",
-      border: "2px solid #4caf50",
-      borderRadius: 12,
-    },
-  };
-
-  // Position each member relative to the group, shifted so the sub-layout's
-  // top-left sits below the title bar.
-  const rebuilt = nodes.map((n) => {
-    if (!memberIds.has(n.id)) return stripTag(n);
-    const p = g.node(n.id);
-    const h = nodeHeight(n.data.members.length);
-    return stripTag({
-      ...n,
-      parentId: groupId,
-      extent: "parent",
+  // Positions relative to the sub-layout origin, shifted below the title bar.
+  const positioned = members.map((m) => {
+    const p = g.node(m.id);
+    const h = nodeHeight(m.data.members.length);
+    return {
+      ...m,
       position: {
         x: p.x - NODE_W / 2 - minX + GROUP_PAD,
         y: p.y - h / 2 - minY + GROUP_PAD + GROUP_TITLE_H,
       },
+    };
+  });
+
+  return {
+    nodes: positioned,
+    width: maxX - minX + GROUP_PAD * 2,
+    height: maxY - minY + GROUP_PAD * 2 + GROUP_TITLE_H,
+  };
+}
+
+/**
+ * Wrap every bureau's teams in its own colored box, tiling the boxes in a grid
+ * so they don't overlap. Boxes are sized to their own content; each grid row's
+ * height is the tallest box in that row, each column's x is based on the widest
+ * box to its left.
+ */
+function wrapAllBureaus(nodes: OrgNode[], edges: OrgEdge[]): OrgNode[] {
+  // First pass: lay out each bureau and measure it.
+  const laidOut = BUREAUS.map((b) => {
+    const members = nodes.filter((n) => n._bureau === b.name);
+    if (members.length === 0) return null;
+    const result = layoutOneBureau(members, edges);
+    return { bureau: b, ...result };
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
+
+  // Compute grid cell positions. Column widths = max width in that column;
+  // row heights = max height in that row.
+  const colWidths: number[] = [];
+  const rowHeights: number[] = [];
+  laidOut.forEach((item, i) => {
+    const col = i % GRID_COLS;
+    const row = Math.floor(i / GRID_COLS);
+    colWidths[col] = Math.max(colWidths[col] || 0, item.width);
+    rowHeights[row] = Math.max(rowHeights[row] || 0, item.height);
+  });
+
+  // Cumulative offsets for each column/row.
+  const colX: number[] = [];
+  let accX = 0;
+  for (let c = 0; c < colWidths.length; c++) {
+    colX[c] = accX;
+    accX += colWidths[c] + GROUP_GAP;
+  }
+  const rowY: number[] = [];
+  let accY = 0;
+  for (let r = 0; r < rowHeights.length; r++) {
+    rowY[r] = accY;
+    accY += rowHeights[r] + GROUP_GAP;
+  }
+
+  const out: OrgNode[] = [];
+  laidOut.forEach((item, i) => {
+    const col = i % GRID_COLS;
+    const row = Math.floor(i / GRID_COLS);
+    const groupId = `group-${item.bureau.name.toLowerCase()}`;
+
+    out.push({
+      id: groupId,
+      type: "groupNode",
+      position: { x: colX[col], y: rowY[row] },
+      data: { teamName: "", members: [], label: item.bureau.name },
+      style: {
+        width: item.width,
+        height: item.height,
+        backgroundColor: item.bureau.fill,
+        border: `2px solid ${item.bureau.border}`,
+        borderRadius: 12,
+      },
+    });
+
+    // Children reference the group and keep their sub-layout positions.
+    item.nodes.forEach((n) => {
+      out.push(
+        stripTag({
+          ...n,
+          parentId: groupId,
+          extent: "parent",
+        })
+      );
     });
   });
 
-  // Group node must come BEFORE its children in the array.
-  return [groupNode, ...rebuilt];
+  return out;
 }
 
 function stripTag(n: OrgNode): OrgNode {
@@ -280,7 +342,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
   }
 
   private render(): void {
-    console.log("=== OrgChart BUILD #30 ===");
+    console.log("=== OrgChart BUILD #31 ===");
     const dataset = this.context.parameters.sampleDataSet;
 
     // Diagnostic: which columns is the Teams dataset actually delivering?
@@ -357,9 +419,16 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     console.log(`EDGES BUILT: ${edges.length} (out of ${dataset.sortedRecordIds.length} teams)`);
 
     const positioned = layoutNodes(nodes, edges);
-    const npsCount = positioned.filter((n) => n._bureau === "NPS").length;
-    console.log(`NPS nodes found: ${npsCount}`);
-    const grouped = wrapBureauGroup(positioned, "NPS", edges);
+
+    // Log bureau distribution so we can confirm all 8 are matching.
+    const bureauCounts: Record<string, number> = {};
+    positioned.forEach((n) => {
+      const b = n._bureau || "(none)";
+      bureauCounts[b] = (bureauCounts[b] || 0) + 1;
+    });
+    console.log("Bureau counts:", JSON.stringify(bureauCounts));
+
+    const grouped = wrapAllBureaus(positioned, edges);
 
     this.root.render(
       React.createElement(App1, {
