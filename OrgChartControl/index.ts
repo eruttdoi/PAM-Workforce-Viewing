@@ -57,6 +57,9 @@ const GROUP_PAD = 40; // space between the group border and the nodes inside
 const GROUP_TITLE_H = 40; // height reserved at the top of the box for the label
 const GROUP_GAP = 60; // gap between adjacent bureau boxes in the grid
 const GRID_COLS = 3; // bureau boxes per row (3 x 3 fits 8 with room to spare)
+const MAX_BUREAU_COLS = 6; // max team nodes per row inside a bureau box (wraps wider ones)
+const CHILD_GAP_X = 40; // horizontal gap between wrapped child nodes
+const CHILD_GAP_Y = 40; // vertical gap between wrapped child rows
 
 // The 8 bureaus, each with a fill + border color. Order = grid placement order.
 const BUREAUS: { name: string; fill: string; border: string; title: string }[] = [
@@ -71,9 +74,12 @@ const BUREAUS: { name: string; fill: string; border: string; title: string }[] =
 ];
 
 /**
- * Lay out a single bureau's members with their own dagre pass and return the
- * positioned member nodes (relative to 0,0 of their sub-layout) plus the
- * sub-layout's width/height.
+ * Lay out a single bureau's members and return the positioned member nodes
+ * (relative to 0,0 of their sub-layout) plus the sub-layout's width/height.
+ *
+ * Structure is 2 layers: root team(s) on top, child teams below. To keep wide
+ * bureaus (many children) from becoming one very long row, children are
+ * wrapped into a grid of at most MAX_BUREAU_COLS per row.
  */
 function layoutOneBureau(
   members: OrgNode[],
@@ -84,43 +90,66 @@ function layoutOneBureau(
     (e) => memberIds.has(e.source) && memberIds.has(e.target)
   );
 
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 80 });
-  members.forEach((m) => {
-    g.setNode(m.id, { width: NODE_W, height: nodeHeight(m.data.members.length) });
-  });
-  internalEdges.forEach((e) => g.setEdge(e.source, e.target));
-  dagre.layout(g);
+  // Identify children (any node that is a target of an internal edge) vs roots.
+  const childIds = new Set(internalEdges.map((e) => e.target));
+  const roots = members.filter((m) => !childIds.has(m.id));
+  const children = members.filter((m) => childIds.has(m.id));
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  members.forEach((m) => {
-    const p = g.node(m.id);
-    const h = nodeHeight(m.data.members.length);
-    minX = Math.min(minX, p.x - NODE_W / 2);
-    minY = Math.min(minY, p.y - h / 2);
-    maxX = Math.max(maxX, p.x + NODE_W / 2);
-    maxY = Math.max(maxY, p.y + h / 2);
+  const contentW = GROUP_PAD; // running left edge for placement
+  const positioned: OrgNode[] = [];
+
+  // --- Roots row: place root(s) across the top, left to right. ---
+  let rootX = GROUP_PAD;
+  const rootY = GROUP_PAD + GROUP_TITLE_H;
+  let rootRowH = 0;
+  roots.forEach((r) => {
+    const h = nodeHeight(r.data.members.length);
+    positioned.push({ ...r, position: { x: rootX, y: rootY } });
+    rootX += NODE_W + CHILD_GAP_X;
+    rootRowH = Math.max(rootRowH, h);
   });
 
-  // Positions relative to the sub-layout origin, shifted below the title bar.
-  const positioned = members.map((m) => {
-    const p = g.node(m.id);
-    const h = nodeHeight(m.data.members.length);
-    return {
-      ...m,
+  // --- Children grid: wrap into rows of at most MAX_BUREAU_COLS. ---
+  const cols = Math.min(children.length || 1, MAX_BUREAU_COLS);
+  const childTop = rootY + rootRowH + CHILD_GAP_Y * 2;
+
+  // Row heights (children in a row can vary in height).
+  const childRowCount = Math.ceil(children.length / cols);
+  const childRowH: number[] = [];
+  for (let r = 0; r < childRowCount; r++) {
+    let h = 0;
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      if (idx < children.length) h = Math.max(h, nodeHeight(children[idx].data.members.length));
+    }
+    childRowH.push(h);
+  }
+  const childRowY: number[] = [];
+  let accY = childTop;
+  for (let r = 0; r < childRowCount; r++) {
+    childRowY.push(accY);
+    accY += childRowH[r] + CHILD_GAP_Y;
+  }
+
+  children.forEach((child, i) => {
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    positioned.push({
+      ...child,
       position: {
-        x: p.x - NODE_W / 2 - minX + GROUP_PAD,
-        y: p.y - h / 2 - minY + GROUP_PAD + GROUP_TITLE_H,
+        x: GROUP_PAD + c * (NODE_W + CHILD_GAP_X),
+        y: childRowY[r],
       },
-    };
+    });
   });
 
-  return {
-    nodes: positioned,
-    width: maxX - minX + GROUP_PAD * 2,
-    height: maxY - minY + GROUP_PAD * 2 + GROUP_TITLE_H,
-  };
+  // Overall box size.
+  const usedCols = Math.max(roots.length, cols, 1);
+  const width = GROUP_PAD * 2 + usedCols * NODE_W + (usedCols - 1) * CHILD_GAP_X;
+  const height = (children.length > 0 ? accY - CHILD_GAP_Y : rootY + rootRowH) + GROUP_PAD;
+
+  void contentW;
+  return { nodes: positioned, width, height };
 }
 
 /**
@@ -342,7 +371,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
   }
 
   private render(): void {
-    console.log("=== OrgChart BUILD #31 ===");
+    console.log("=== OrgChart BUILD #32 ===");
     const dataset = this.context.parameters.sampleDataSet;
 
     // Diagnostic: which columns is the Teams dataset actually delivering?
@@ -420,7 +449,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
 
     const positioned = layoutNodes(nodes, edges);
 
-    // Log bureau distribution so we can confirm all 8 are matching.
+    // Log bureau distribution so we can confirm matching.
     const bureauCounts: Record<string, number> = {};
     positioned.forEach((n) => {
       const b = n._bureau || "(none)";
@@ -428,7 +457,18 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     });
     console.log("Bureau counts:", JSON.stringify(bureauCounts));
 
-    const grouped = wrapAllBureaus(positioned, edges);
+    // Decide layout mode: if any teams match one of the known bureaus, use the
+    // grouped (boxed) layout; otherwise render a plain flat hierarchy. This lets
+    // the same control serve the bureau-grouped PAM directorate AND the flat
+    // BIO directorate without configuration.
+    const knownBureauNames = new Set(BUREAUS.map((b) => b.name));
+    const anyBureau = positioned.some((n) => n._bureau && knownBureauNames.has(n._bureau));
+
+    const grouped = anyBureau
+      ? wrapAllBureaus(positioned, edges)
+      : positioned.map(stripTag); // flat: dagre layout already applied
+
+    console.log(`layout mode: ${anyBureau ? "grouped (bureaus)" : "flat"}`);
 
     this.root.render(
       React.createElement(App1, {
