@@ -346,6 +346,8 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     }
 
     // employees -> chain through position -> team
+    // Track which positions are filled so we can mark the rest "Vacant".
+    const filledPositions = new Set<string>();
     let hadName = 0, hadPosRef = 0, hadPosMatch = 0, hadTeamMatch = 0;
     for (const id of empDs.sortedRecordIds) {
       const rec = empDs.records[id];
@@ -361,17 +363,31 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
       if (teamId) hadTeamMatch++;
 
       if (!name || !teamId) continue;
+      if (posShortId) filledPositions.add(posShortId);
       (map[teamId] = map[teamId] || []).push(name);
     }
 
+    // Vacant positions: any position not filled by an employee gets a "Vacant"
+    // entry on its team.
+    let vacantCount = 0;
+    for (const id of posDs.sortedRecordIds) {
+      const shortId = norm(id);
+      if (filledPositions.has(shortId)) continue;
+      const teamGuid = posToTeam[shortId];
+      const teamId = teamGuid ? guidToNodeId[teamGuid] : null;
+      if (!teamId) continue;
+      (map[teamId] = map[teamId] || []).push("Vacant");
+      vacantCount++;
+    }
+
     console.log(`chain funnel -> hadName:${hadName} hadPosRef:${hadPosRef} hadPosMatch:${hadPosMatch} hadTeamMatch:${hadTeamMatch}`);
-    console.log(`posToTeam keys: ${Object.keys(posToTeam).length}, posGuidToShortId keys: ${Object.keys(posGuidToShortId).length}`);
+    console.log(`posToTeam keys: ${Object.keys(posToTeam).length}, posGuidToShortId keys: ${Object.keys(posGuidToShortId).length}, vacantPositions: ${vacantCount}`);
     console.log(`membersByTeam keys built: ${Object.keys(map).length}`);
     return map;
   }
 
   private render(): void {
-    console.log("=== OrgChart BUILD #32 ===");
+    console.log("=== OrgChart BUILD #33 ===");
     const dataset = this.context.parameters.sampleDataSet;
 
     // Diagnostic: which columns is the Teams dataset actually delivering?

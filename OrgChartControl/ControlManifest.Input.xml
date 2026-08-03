@@ -3,7 +3,7 @@
   <control
     namespace="YourCompany"
     constructor="OrgChartControl"
-    version="1.0.55"
+    version="1.0.59"
     display-name-key="OrgChartControl_Display_Key"
     description-key="OrgChartControl_Desc_Key"
     control-type="standard">

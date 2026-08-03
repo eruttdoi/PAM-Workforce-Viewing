@@ -10,7 +10,7 @@ import {
 } from "@xyflow/react";
 
 import type { Node, Edge } from "@xyflow/react";
-import * as React from "react";
+import * as React from "react"
 import "@xyflow/react/dist/style.css";
 
 function TeamNode({ data }: any) {
@@ -51,16 +51,21 @@ function TeamNode({ data }: any) {
       </div>
 
       <div style={{ padding: 10 }}>
-        {data.members.map((m: string) => (
-          <div
-            key={m}
-            style={{
-              padding: "4px 0",
-            }}
-          >
-            {m}
-          </div>
-        ))}
+        {data.members.map((m: string, i: number) => {
+          const isVacant = m === "Vacant";
+          return (
+            <div
+              key={`${m}-${i}`}
+              style={{
+                padding: "4px 0",
+                color: isVacant ? "#999" : "inherit",
+                fontStyle: isVacant ? "italic" : "normal",
+              }}
+            >
+              {isVacant ? "— Vacant —" : m}
+            </div>
+          );
+        })}
       </div>
 
       <Handle type="source" position={Position.Bottom} />
@@ -113,6 +118,72 @@ export default function App1({ initialNodes, initialEdges }: AppProps) {
     setEdges(initialEdges);
   }, [initialEdges, setEdges]);
 
+  const dragState = React.useRef<{
+  ctrl: boolean;
+  rootStart: { x: number; y: number };
+  descendants: { id: string; start: { x: number; y: number } }[];
+} | null>(null);
+
+// Find all descendant node ids of a given node by walking edges downward.
+const getDescendants = React.useCallback((rootId: string): string[] => {
+  const childrenOf: Record<string, string[]> = {};
+  edges.forEach((e) => {
+    (childrenOf[e.source] = childrenOf[e.source] || []).push(e.target);
+  });
+  const result: string[] = [];
+  const stack = [...(childrenOf[rootId] || [])];
+  const seen = new Set<string>();
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+    (childrenOf[id] || []).forEach((c) => stack.push(c));
+  }
+  return result;
+}, [edges]);
+
+const onNodeDragStart = React.useCallback(
+  (event: MouseEvent | TouchEvent, node: Node) => {
+    const ctrl = "ctrlKey" in event ? (event.ctrlKey || event.metaKey) : false;
+    if (!ctrl) {
+      dragState.current = null;
+      return;
+    }
+    const descIds = getDescendants(node.id);
+    const descSet = new Set(descIds);
+    dragState.current = {
+      ctrl: true,
+      rootStart: { ...node.position },
+      descendants: nodes
+        .filter((n) => descSet.has(n.id))
+        .map((n) => ({ id: n.id, start: { ...n.position } })),
+    };
+  },
+  [getDescendants, nodes]
+);
+
+const onNodeDrag = React.useCallback(
+  (_event: MouseEvent | TouchEvent, node: Node) => {
+    const st = dragState.current;
+    if (!st || !st.ctrl) return;
+    const dx = node.position.x - st.rootStart.x;
+    const dy = node.position.y - st.rootStart.y;
+    setNodes((nds) =>
+      nds.map((n) => {
+        const d = st.descendants.find((x) => x.id === n.id);
+        if (!d) return n;
+        return { ...n, position: { x: d.start.x + dx, y: d.start.y + dy } };
+      })
+    );
+  },
+  [setNodes]
+);
+
+const onNodeDragStop = React.useCallback(() => {
+  dragState.current = null;
+}, []);
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
       <ReactFlow
@@ -121,6 +192,9 @@ export default function App1({ initialNodes, initialEdges }: AppProps) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDrag={onNodeDrag}
+        onNodeDragStop={onNodeDragStop}
         minZoom={0.2}
         maxZoom={2}
         fitView
@@ -132,6 +206,8 @@ export default function App1({ initialNodes, initialEdges }: AppProps) {
         zoomOnPinch
         zoomOnDoubleClick
         nodesDraggable
+        multiSelectionKeyCode={null}
+        selectionKeyCode={null}
       >
         <MiniMap />
         <Controls />

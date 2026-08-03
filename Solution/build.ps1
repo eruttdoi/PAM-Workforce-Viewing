@@ -17,4 +17,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Import failed." -ForegroundColor Red; exi
 
 Write-Host "Build and import complete." -ForegroundColor Green
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.MessageBox]::Show("Your build is done!", "Notification") | Out-Null
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+[System.Windows.Forms.MessageBox]::Show($owner, "Your build is done!", "Notification") | Out-Null
+$owner.Dispose()
