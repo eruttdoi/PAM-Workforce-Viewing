@@ -11,7 +11,7 @@ interface OrgNode {
   id: string;
   type: string;
   position: { x: number; y: number };
-  data: { teamName: string; members: string[]; label?: string };
+  data: { teamName: string; members: string[]; label?: string; teamInfo?: string };
   style?: Record<string, string | number>;
   parentId?: string;
   extent?: "parent";
@@ -387,7 +387,7 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
   }
 
   private render(): void {
-    console.log("=== OrgChart BUILD #33 ===");
+    console.log("=== OrgChart BUILD #34 ===");
     const dataset = this.context.parameters.sampleDataSet;
 
     // Diagnostic: which columns is the Teams dataset actually delivering?
@@ -405,6 +405,11 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
     const bureauCol = dataset.columns.find(
       (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
         c.name.toLowerCase() === "pam_originatingbureau"
+    )?.name;
+
+    const infoCol = dataset.columns.find(
+      (c: ComponentFramework.PropertyHelper.DataSetApi.Column) =>
+        c.name.toLowerCase() === "pam_teaminfo"
     )?.name;
 
     // Record id is a short key; parent lookup returns a GUID. Map GUID->nodeId.
@@ -430,13 +435,15 @@ export class OrgChartControl implements ComponentFramework.StandardControl<IInpu
       const teamName = record.getFormattedValue("pam_team");
       const bureauRaw = bureauCol ? (record.getValue(bureauCol) as string | null) : null;
       const bureau = bureauRaw ? bureauRaw.trim().toUpperCase() : null;
+      const teamInfo = infoCol ? (record.getFormattedValue(infoCol) || "") : "";
       return {
         id: teamKey,
         type: "teamNode",
         position: { x: index * 300, y: 100 },
         data: {
           teamName: teamName,
-          members: membersByTeam[teamKey] || []
+          members: membersByTeam[teamKey] || [],
+          teamInfo: teamInfo
         },
         _bureau: bureau
       };
